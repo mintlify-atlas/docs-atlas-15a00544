@@ -1,0 +1,44 @@
+---
+title: "Installation"
+description: "Install the iMessage & Mail skill and configure macOS permissions"
+---
+
+<Steps>
+  <Step title="Clone the repo and copy skill files">
+    Clone the repository and copy the skill into your Claude Code skills directory:
+
+    ```bash
+    git clone https://github.com/stat-guy/imessage-mail.git
+    mkdir -p ~/.claude/skills/imessage-mail
+    cp -r imessage-mail/SKILL.md ~/.claude/skills/imessage-mail/
+    cp -r imessage-mail/agents ~/.claude/skills/imessage-mail/
+    ```
+
+    This places the orchestrator and all six agent files under `~/.claude/skills/imessage-mail/`, which is where Claude Code looks for installed skills.
+  </Step>
+
+  <Step title="Grant Full Disk Access to your terminal">
+    The skill reads local SQLite databases that macOS protects under Full Disk Access. You must grant this permission to whichever terminal app you use with Claude Code.
+
+    1. Open **System Settings** > **Privacy & Security** > **Full Disk Access**
+    2. Click the **+** button
+    3. Add your terminal app — common options: **Terminal.app**, **iTerm2**, **Warp**, **Ghostty**
+    4. Restart the terminal
+
+    <Warning>
+      This step is required. Without Full Disk Access, the skill cannot read the Messages or Mail databases and all queries will fail.
+    </Warning>
+  </Step>
+
+  <Step title="Approve Apple permission prompts">
+    The first time you send an iMessage or email, macOS will show a dialog asking whether to allow your terminal to control **Messages.app** or **Mail.app** via AppleScript.
+
+    Click **Allow** — this is a one-time prompt per app. Once allowed, the skill sends messages without further prompts.
+
+    If you accidentally click Deny, re-enable it at any time: **System Settings** > **Privacy & Security** > **Automation**.
+  </Step>
+</Steps>
+
+<Tip>
+  After installation, run `/imessage-mail recent` in Claude Code to verify everything is working.
+</Tip>

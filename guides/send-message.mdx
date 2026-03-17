@@ -1,0 +1,243 @@
+---
+title: "Sending messages"
+description: "Send iMessages and emails via AppleScript with a confirmation prompt"
+---
+
+The send message agent composes and delivers iMessages through Messages.app and emails through Mail.app using AppleScript (`osascript`). It always shows you a preview of the message and asks for confirmation before sending.
+
+## When to use
+
+- You want to send a text to a contact: "text John that I'll be late"
+- You want to send an email: "email jane@example.com about the invoice"
+- You want to reply after reading a conversation: "reply to that"
+- You asked "tell them I'm on my way" or "respond saying yes"
+
+## Trigger phrases
+
+```
+Send a text to John saying...
+Reply to Troy's email
+Text +1234567890 saying...
+Email jane@example.com about...
+Tell them I'll be late
+Respond to that message
+```
+
+## Confirmation flow
+
+<Warning>
+  The agent **always** shows you the full message and asks for confirmation before sending. This cannot be skipped unless you explicitly say "just send it" or "hit send" upfront. This behavior prevents accidental messages.
+</Warning>
+
+Before every send, the agent presents:
+
+```
+**Ready to send:**
+
+**Type:** iMessage
+**To:** John Smith (+13059651169)
+
+> Hey, are we still on for tonight?
+
+Send this? (y/n)
+```
+
+After you confirm, you receive a delivery confirmation:
+
+```
+Sent! iMessage delivered to John Smith (+13059651169):
+
+> Hey, are we still on for tonight?
+```
+
+For emails:
+
+```
+Sent! Email delivered via Mail.app to john@example.com:
+
+**Subject:** Re: Project Update
+> Thanks for sending that over, I'll review it today.
+```
+
+## Sending iMessages
+
+### Basic iMessage
+
+iMessages are sent through Messages.app via AppleScript. Phone numbers must be in E.164 format (e.g., `+13059651169`). The agent strips parentheses, dashes, and spaces from whatever number you provide.
+
+```applescript
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set targetBuddy to participant "+13059651169" of targetService
+    send "Hey, are we still on for tonight?" to targetBuddy
+end tell
+```
+
+### Send to a contact by name
+
+When you provide a name instead of a number, the agent resolves it from your Address Book first:
+
+```sql
+SELECT T2.ZFULLNUMBER, T1.ZFIRSTNAME, T1.ZLASTNAME
+FROM ZABCDRECORD AS T1
+INNER JOIN ZABCDPHONENUMBER AS T2 ON T1.Z_PK = T2.ZOWNER
+WHERE LOWER(T1.ZFIRSTNAME) LIKE LOWER('%<name>%')
+   OR LOWER(T1.ZLASTNAME) LIKE LOWER('%<name>%')
+   OR LOWER(T1.ZFIRSTNAME || ' ' || T1.ZLASTNAME) LIKE LOWER('%<name>%');
+```
+
+If multiple contacts match the name, the agent lists them and asks you to choose before proceeding.
+
+### iMessage to an email handle
+
+Some iMessage contacts are registered with an email address rather than a phone number:
+
+```applescript
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set targetBuddy to participant "john@example.com" of targetService
+    send "See you tomorrow!" to targetBuddy
+end tell
+```
+
+### Emojis
+
+Emojis work natively in AppleScript strings and can be included directly:
+
+```applescript
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set targetBuddy to participant "+13059651169" of targetService
+    send "Hey! 🤖⚡🔥💻🚀✊" to targetBuddy
+end tell
+```
+
+### Escaping single quotes
+
+AppleScript strings are passed inside a shell `-e` argument delimited by single quotes. If your message contains a single quote (e.g., "I'll be there"), you must escape it:
+
+```bash
+# Message: "I'll be there"
+osascript -e '
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set targetBuddy to participant "+13059651169" of targetService
+    send "I'\''ll be there" to targetBuddy
+end tell'
+```
+
+For messages with complex characters, use a heredoc to avoid shell quoting issues entirely:
+
+```bash
+osascript <<'APPLESCRIPT'
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set targetBuddy to participant "+13059651169" of targetService
+    send "Message with 'quotes' and \"double quotes\" and emojis 🎉" to targetBuddy
+end tell
+APPLESCRIPT
+```
+
+## Sending emails
+
+Emails are sent through Mail.app using whatever account is set as the default in Mail preferences.
+
+### New email
+
+```applescript
+tell application "Mail"
+    set newMessage to make new outgoing message with properties \
+        {subject:"Invoice for March", content:"Hi Jane, please find the invoice attached.", visible:false}
+    tell newMessage
+        make new to recipient at end of to recipients \
+            with properties {name:"Jane Doe", address:"jane@corp.com"}
+    end tell
+    send newMessage
+end tell
+```
+
+### Reply to an email thread
+
+To reply within an existing thread, prefix the original subject with `Re:`. Mail.app uses the subject to thread the message automatically:
+
+```applescript
+tell application "Mail"
+    set newMessage to make new outgoing message with properties \
+        {subject:"Re: Project Update", content:"Thanks for sending that over.", visible:false}
+    tell newMessage
+        make new to recipient at end of to recipients \
+            with properties {name:"John Smith", address:"john@example.com"}
+    end tell
+    send newMessage
+end tell
+```
+
+### Email with CC and BCC
+
+```applescript
+tell application "Mail"
+    set newMessage to make new outgoing message with properties \
+        {subject:"Q1 Summary", content:"Please see the summary below.", visible:false}
+    tell newMessage
+        make new to recipient at end of to recipients \
+            with properties {name:"John Smith", address:"john@example.com"}
+        make new cc recipient at end of cc recipients \
+            with properties {name:"Jane Doe", address:"jane@corp.com"}
+        make new bcc recipient at end of bcc recipients \
+            with properties {name:"Manager", address:"manager@corp.com"}
+    end tell
+    send newMessage
+end tell
+```
+
+### Resolve email address from a contact name
+
+When you say "email John about...", the agent looks up the email address first:
+
+```sql
+SELECT T2.ZADDRESS, T1.ZFIRSTNAME, T1.ZLASTNAME
+FROM ZABCDRECORD AS T1
+INNER JOIN ZABCDEMAILADDRESS AS T2 ON T1.Z_PK = T2.ZOWNER
+WHERE LOWER(T1.ZFIRSTNAME) LIKE LOWER('%<name>%')
+   OR LOWER(T1.ZLASTNAME) LIKE LOWER('%<name>%')
+   OR LOWER(T1.ZFIRSTNAME || ' ' || T1.ZLASTNAME) LIKE LOWER('%<name>%');
+```
+
+## Replying in context
+
+When you ask to "reply to that" immediately after reading a conversation or email, the agent reuses context from the current session:
+
+- For iMessage replies, the handle (phone number or email) from the conversation already in view is used directly
+- For email replies, the subject is prefixed with `Re: ` if not already present
+- No additional contact resolution is needed
+
+## Error handling
+
+| Situation | Behavior |
+|-----------|----------|
+| Messages.app is not running | AppleScript launches it automatically |
+| Mail.app is not running | AppleScript launches it automatically |
+| Phone number not registered with iMessage | Send fails — the agent informs you and suggests checking the number |
+| Mail.app has no configured accounts | Send fails — the agent asks you to add an account in Mail preferences |
+| AppleScript returns no output and no error | This is normal — it means the message was delivered successfully |
+
+<Note>
+  AppleScript does not return a delivery receipt for iMessages. A successful send is indicated by the absence of an error, not by a confirmation response.
+</Note>
+
+## What to do next
+
+<CardGroup cols={2}>
+  <Card title="Read a conversation" icon="messages" href="/guides/conversation-reader">
+    Review the thread before composing a reply.
+  </Card>
+  <Card title="Read email" icon="envelope" href="/guides/mail-reader">
+    Read the full email thread before responding.
+  </Card>
+  <Card title="Recent activity" icon="clock" href="/guides/recent-activity">
+    See who has been in touch before deciding who to reply to.
+  </Card>
+  <Card title="Search messages" icon="magnifying-glass" href="/guides/message-search">
+    Find a specific message for context before replying.
+  </Card>
+</CardGroup>

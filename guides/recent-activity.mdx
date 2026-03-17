@@ -1,0 +1,193 @@
+---
+title: "Recent activity"
+description: "See who texted or emailed you recently, with message previews and unread counts"
+---
+
+The recent activity agent gives you a snapshot of your latest iMessage contacts and Apple Mail inbox. It resolves phone numbers to contact names, shows message previews, and reports your unread email count — all in one command.
+
+## When to use
+
+- You want to catch up after being away from your phone
+- You want a quick overview of who has been in touch recently
+- You want to see unread emails alongside your latest texts
+- You asked "what did I miss?" or "any new messages?"
+
+## Trigger phrases
+
+```
+recent messages
+who texted me
+latest texts
+any new emails
+what did I miss
+recent activity
+```
+
+## How it works
+
+<Steps>
+  <Step title="Fetch recent iMessage handles">
+    Queries `chat.db` for the 15 most recent unique contacts, sorted by latest message date. Returns the handle (phone number or email), last message timestamp, total message count, and a received/sent breakdown.
+
+    ```sql
+    SELECT
+      h.id,
+      MAX(datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime')) as last_message,
+      COUNT(m.ROWID) as message_count,
+      SUM(CASE WHEN m.is_from_me = 0 THEN 1 ELSE 0 END) as received,
+      SUM(CASE WHEN m.is_from_me = 1 THEN 1 ELSE 0 END) as sent
+    FROM message m
+    JOIN handle h ON m.handle_id = h.ROWID
+    GROUP BY h.id
+    ORDER BY MAX(m.date) DESC
+    LIMIT 15;
+    ```
+  </Step>
+
+  <Step title="Fetch recent Apple Mail (parallel)">
+    A subagent runs this in parallel with the iMessage query. Returns the 10 most recent emails with sender name, address, subject, received time, and read status.
+
+    ```sql
+    SELECT
+      m.ROWID,
+      a.comment as sender_name,
+      a.address as sender_email,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received,
+      CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status,
+      m.flagged
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE m.deleted = 0
+    ORDER BY m.date_received DESC
+    LIMIT 10;
+    ```
+
+    The unread count is fetched separately:
+
+    ```sql
+    SELECT COUNT(*) FROM messages WHERE deleted = 0 AND read = 0;
+    ```
+  </Step>
+
+  <Step title="Resolve contact names (parallel subagents)">
+    For each phone number handle, a contact-resolver subagent queries the Address Book using the last 7 digits for fuzzy matching:
+
+    ```sql
+    SELECT ZFIRSTNAME, ZLASTNAME
+    FROM ZABCDRECORD AS T1
+    INNER JOIN ZABCDPHONENUMBER AS T2 ON T1.Z_PK = T2.ZOWNER
+    WHERE T2.ZFULLNUMBER LIKE '%<last_7_digits>%'
+    LIMIT 1;
+    ```
+
+    For email handles, the lookup uses the full address:
+
+    ```sql
+    SELECT ZFIRSTNAME, ZLASTNAME
+    FROM ZABCDRECORD AS T1
+    INNER JOIN ZABCDEMAILADDRESS AS T2 ON T1.Z_PK = T2.ZOWNER
+    WHERE T2.ZADDRESS = '<email>'
+    LIMIT 1;
+    ```
+
+    <Tip>
+      When there are many handles to resolve, the agent batches them into 2–3 parallel subagent calls (each resolving 5–7 numbers) rather than one request per handle.
+    </Tip>
+  </Step>
+
+  <Step title="Fetch message previews">
+    For the 5 most recent contacts, fetches the latest message text:
+
+    ```sql
+    SELECT
+      COALESCE(m.text, CASE WHEN m.attributedBody IS NOT NULL THEN '[Rich Text]' ELSE '[No Text]' END)
+    FROM message m
+    JOIN handle h ON m.handle_id = h.ROWID
+    WHERE h.id LIKE '%<digits>'
+    ORDER BY m.date DESC
+    LIMIT 1;
+    ```
+
+    If the result is `[Rich Text]`, the content is stored in `attributedBody` as an `NSAttributedString` blob. The agent extracts readable text with:
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db \
+      "SELECT HEX(attributedBody) FROM message
+       WHERE handle_id = (SELECT ROWID FROM handle WHERE id LIKE '%<digits>')
+       ORDER BY date DESC LIMIT 1;" | xxd -r -p | strings | head -5
+    ```
+  </Step>
+
+  <Step title="Fetch group chat activity (when requested)">
+    If you ask about group chats or "all recent" activity, the agent also queries named group conversations:
+
+    ```sql
+    SELECT
+      c.display_name,
+      c.chat_identifier,
+      MAX(datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime')) as last_message,
+      COUNT(m.ROWID) as message_count
+    FROM chat c
+    JOIN chat_message_join cmj ON c.ROWID = cmj.chat_id
+    JOIN message m ON cmj.message_id = m.ROWID
+    WHERE c.display_name IS NOT NULL AND c.display_name != ''
+    GROUP BY c.ROWID
+    ORDER BY MAX(m.date) DESC
+    LIMIT 10;
+    ```
+  </Step>
+</Steps>
+
+## Output format
+
+```
+## Recent iMessages
+
+| Contact | Last Message | Messages | Preview |
+|---------|-------------|----------|---------|
+| John Smith (+1234567890) | 2026-03-16 14:30 | 45 (↓23 ↑22) | "Hey, are we still on for..." |
+| Jane Doe (+0987654321) | 2026-03-16 12:15 | 12 (↓8 ↑4) | "Thanks for sending that!" |
+| +1555123456 | 2026-03-15 09:00 | 3 (↓3 ↑0) | [Attachment: image] |
+
+### Group Chats
+| Name | Last Activity | Messages |
+|------|--------------|----------|
+| Family Chat | 2026-03-16 13:00 | 128 |
+
+---
+
+## Recent Emails (5 unread)
+
+| Status | From | Subject | Received |
+|--------|------|---------|----------|
+| UNREAD | John Smith (john@example.com) | Re: Project Update | Mar 16, 18:30 |
+| Read | GitHub (noreply@github.com) | [repo] PR #42 merged | Mar 16, 17:00 |
+| UNREAD | Jane Doe (jane@corp.com) | Q1 Report | Mar 16, 15:20 |
+```
+
+<Note>
+  The message count columns show total messages, with `↓` for received and `↑` for sent. A contact showing `↓3 ↑0` means you received 3 messages and haven't replied.
+</Note>
+
+<Note>
+  Group chats only appear when you explicitly ask about them or request "all recent" activity. One-on-one conversations are shown by default.
+</Note>
+
+## What to do next
+
+<CardGroup cols={2}>
+  <Card title="Read a conversation" icon="messages" href="/guides/conversation-reader">
+    See the full message history with any contact shown in the activity list.
+  </Card>
+  <Card title="Read an email" icon="envelope" href="/guides/mail-reader">
+    Open and read the full body of any email from the recent list.
+  </Card>
+  <Card title="Find attachments" icon="paperclip" href="/guides/attachment-finder">
+    Browse photos, files, and other attachments from recent conversations.
+  </Card>
+  <Card title="Send a message" icon="paper-plane" href="/guides/send-message">
+    Reply to any contact directly from the activity view.
+  </Card>
+</CardGroup>

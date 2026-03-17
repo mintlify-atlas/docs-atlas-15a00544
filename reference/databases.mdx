@@ -1,0 +1,213 @@
+---
+title: "Database reference"
+description: "SQLite databases queried by iMessage & Mail and their schemas"
+---
+
+## Overview
+
+The skill reads three local SQLite databases on macOS. All access is read-only except for send operations, which use AppleScript instead of SQL.
+
+| Database | Path | Contains |
+|---|---|---|
+| Messages | `~/Library/Messages/chat.db` | iMessage and SMS history, attachments, handles |
+| Mail | `~/Library/Mail/V10/MailData/Envelope Index` | Email metadata, senders, subjects, mailboxes |
+| Contacts | `~/Library/Application Support/AddressBook/AddressBook-v22.abcddb` | Names, phone numbers, email addresses |
+
+<Note>
+  All three databases are protected by macOS. Your terminal must have **Full Disk Access** granted in System Settings > Privacy & Security before any queries will succeed.
+</Note>
+
+<Tabs>
+  <Tab title="Messages (chat.db)">
+
+## Messages database
+
+**Path**: `~/Library/Messages/chat.db`
+
+This database stores all iMessage and SMS history, including message text, handles (phone numbers and email addresses), chat threads, and attachments.
+
+### Key tables
+
+| Table | Purpose |
+|---|---|
+| `message` | One row per message — text, timestamp, sender flag, attributed body |
+| `handle` | Contact identifiers (phone numbers or email addresses) |
+| `chat` | Conversation threads, including group chats |
+| `chat_message_join` | Many-to-many join between chats and messages |
+| `attachment` | Files attached to messages — filename, MIME type, size |
+| `message_attachment_join` | Many-to-many join between messages and attachments |
+
+### Important columns on `message`
+
+| Column | Type | Description |
+|---|---|---|
+| `ROWID` | integer | Primary key |
+| `text` | text | Plain text content. May be `NULL` if content is in `attributedBody` |
+| `attributedBody` | blob | `NSAttributedString` blob. Contains rich text when `text` is empty |
+| `date` | integer | Timestamp in nanoseconds since Jan 1, 2001 (Mac CoreData epoch) |
+| `is_from_me` | integer | `1` = sent by you, `0` = received |
+| `handle_id` | integer | Foreign key to `handle.ROWID` |
+
+### Timestamp conversion
+
+iMessage uses the Mac CoreData (Cocoa) epoch — seconds since **January 1, 2001**, not the Unix epoch (January 1, 1970). In recent macOS versions, `message.date` is stored in **nanoseconds**, so divide by `1,000,000,000` first, then add `978307200` to shift to Unix epoch:
+
+```sql
+datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime')
+```
+
+### Example: fetch recent messages
+
+```sql
+SELECT
+  m.ROWID,
+  h.id as contact,
+  CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END as sender,
+  COALESCE(m.text, CASE WHEN m.attributedBody IS NOT NULL THEN '[Rich Text/Hidden]' ELSE '[No Text]' END) as content,
+  datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp
+FROM message m
+JOIN handle h ON m.handle_id = h.ROWID
+ORDER BY m.date DESC
+LIMIT 25;
+```
+
+### The `attributedBody` column
+
+Many messages — especially those with formatting, links, or reactions — store their content in `attributedBody` as an `NSAttributedString` binary blob rather than the `text` column. If `text` is `NULL` or empty, the message content is in `attributedBody`.
+
+To extract readable text from the blob:
+
+```bash
+sqlite3 ~/Library/Messages/chat.db \
+  "SELECT HEX(attributedBody) FROM message WHERE ROWID = <ROWID>;" \
+  | xxd -r -p | strings
+```
+
+<Tip>
+  When multiple messages show `[Rich Text/Hidden]`, batch all ROWIDs into a single subagent call to extract them in one pass rather than running the command once per message.
+</Tip>
+
+  </Tab>
+  <Tab title="Mail (Envelope Index)">
+
+## Mail database
+
+**Path**: `~/Library/Mail/V10/MailData/Envelope Index`
+
+This is a SQLite database with no `.db` extension. The path must always be quoted when passed to `sqlite3`.
+
+```bash
+sqlite3 ~/Library/Mail/V10/MailData/"Envelope Index" "SELECT COUNT(*) FROM messages;"
+```
+
+The Envelope Index stores email **metadata** only. Email body text is stored in separate `.emlx` files on disk.
+
+### Key tables
+
+| Table | Purpose |
+|---|---|
+| `messages` | One row per email — sender, subject, dates, mailbox, read/flagged/deleted flags |
+| `addresses` | Email addresses and display names |
+| `subjects` | Subject line strings (normalized, referenced by FK) |
+| `mailboxes` | Mailbox list with URL, total count, unread count |
+| `recipients` | TO/CC/BCC recipients per message |
+| `attachments` | Filenames of email attachments |
+| `summaries` | AI-generated summary text (if available) |
+
+### Timestamp conversion
+
+Apple Mail uses the standard Unix epoch for `date_received` and `date_sent`:
+
+```sql
+datetime(m.date_received, 'unixepoch', 'localtime')
+```
+
+### Example: list recent emails
+
+```sql
+SELECT
+  m.ROWID,
+  a.comment as sender_name,
+  a.address as sender_email,
+  sub.subject,
+  datetime(m.date_received, 'unixepoch', 'localtime') as received,
+  CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status
+FROM messages m
+LEFT JOIN addresses a ON m.sender = a.ROWID
+LEFT JOIN subjects sub ON m.subject = sub.ROWID
+WHERE m.deleted = 0
+ORDER BY m.date_received DESC
+LIMIT 20;
+```
+
+### Reading email body content
+
+The Envelope Index does not store message body text. To read an email's content, locate its `.emlx` file:
+
+```bash
+# Find the emlx file by message ROWID
+find ~/Library/Mail/V10 -name "<MESSAGE_ROWID>.emlx" 2>/dev/null | head -1
+```
+
+The `.emlx` format has a byte count on the first line followed by the raw RFC 2822 message. Skip the first line to read the email:
+
+```bash
+cat "$(find ~/Library/Mail/V10 -name '<MESSAGE_ROWID>.emlx' 2>/dev/null | head -1)" | tail -n +2
+```
+
+  </Tab>
+  <Tab title="Contacts">
+
+## Contacts database
+
+**Path**: `~/Library/Application Support/AddressBook/AddressBook-v22.abcddb`
+
+This database backs the macOS Contacts.app. The skill queries it to resolve phone numbers and email addresses to display names.
+
+### Key tables
+
+| Table | Purpose |
+|---|---|
+| `ZABCDRECORD` | One row per contact — first name, last name, organization |
+| `ZABCDPHONENUMBER` | Phone numbers linked to contacts |
+| `ZABCDEMAILADDRESS` | Email addresses linked to contacts |
+
+### Phone number lookup
+
+Phone numbers in the Address Book are stored in various formats (`+1 (555) 123-4567`, `555-123-4567`, etc.). The most reliable lookup uses the **last 7 digits** with a `LIKE` filter:
+
+```sql
+SELECT ZFIRSTNAME, ZLASTNAME
+FROM ZABCDRECORD AS T1
+INNER JOIN ZABCDPHONENUMBER AS T2 ON T1.Z_PK = T2.ZOWNER
+WHERE T2.ZFULLNUMBER LIKE '%<last_7_digits>%'
+LIMIT 1;
+```
+
+### Email address lookup
+
+Email lookups use an exact match on the `ZADDRESS` column:
+
+```sql
+SELECT ZFIRSTNAME, ZLASTNAME
+FROM ZABCDRECORD AS T1
+INNER JOIN ZABCDEMAILADDRESS AS T2 ON T1.Z_PK = T2.ZOWNER
+WHERE T2.ZADDRESS = '<email>'
+LIMIT 1;
+```
+
+### Full contact lookup (phone + email)
+
+When resolving a contact by name for cross-source queries, fetch both phone and email in one query:
+
+```sql
+SELECT T1.ZFIRSTNAME, T1.ZLASTNAME, T2.ZFULLNUMBER, T3.ZADDRESS
+FROM ZABCDRECORD AS T1
+LEFT JOIN ZABCDPHONENUMBER AS T2 ON T1.Z_PK = T2.ZOWNER
+LEFT JOIN ZABCDEMAILADDRESS AS T3 ON T1.Z_PK = T3.ZOWNER
+WHERE LOWER(T1.ZFIRSTNAME) LIKE LOWER('%<name>%')
+   OR LOWER(T1.ZLASTNAME) LIKE LOWER('%<name>%');
+```
+
+  </Tab>
+</Tabs>

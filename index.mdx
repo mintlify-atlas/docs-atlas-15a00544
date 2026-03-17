@@ -1,97 +1,67 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "iMessage & Mail"
+description: "A Claude Code skill for reading, searching, and sending iMessages and emails on macOS"
 ---
 
-## Setting up
+<img
+  src="https://media.brand.dev/d6c060ec-2523-4c85-8154-1eb3bc30b0a5.svg"
+  alt="iMessage & Mail"
+  style={{ height: "60px", marginBottom: "24px" }}
+/>
 
-Get your documentation site up and running in minutes.
+Read your messages, search your inbox, and send texts and emails — all from Claude Code using natural language. This skill queries your local macOS databases directly, so no data ever leaves your Mac.
 
-<Card
-  title="Start here"
-  icon="rocket"
-  href="/quickstart"
-  horizontal
->
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/installation">
+    Set up the skill and grant the required macOS permissions in minutes.
   </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Start reading and sending messages with your first commands.
   </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
+  <Card title="Recent Activity" icon="clock" href="/guides/recent-activity">
+    See who texted or emailed you, with previews and unread counts.
   </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
+  <Card title="Send Messages" icon="paper-plane" href="/guides/send-message">
+    Send iMessages and emails via AppleScript with a confirmation prompt.
   </Card>
-</Columns>
+</CardGroup>
 
-## Create beautiful pages
+## What you can do
 
-Everything you need to create world-class documentation.
+<CardGroup cols={3}>
+  <Card title="Recent Activity" icon="bell" href="/guides/recent-activity">
+    Overview of recent iMessages and emails across all contacts
+  </Card>
+  <Card title="Read Conversations" icon="message" href="/guides/conversation-reader">
+    Full message history for any contact by name or phone number
+  </Card>
+  <Card title="Search Messages" icon="magnifying-glass" href="/guides/message-search">
+    Full-text search across iMessages and Apple Mail simultaneously
+  </Card>
+  <Card title="Find Attachments" icon="paperclip" href="/guides/attachment-finder">
+    Locate photos, videos, PDFs, and other files from messages
+  </Card>
+  <Card title="Read Email" icon="envelope" href="/guides/mail-reader">
+    Browse, search, and read Apple Mail emails from the terminal
+  </Card>
+  <Card title="Send Messages" icon="paper-plane" href="/guides/send-message">
+    Send iMessages and emails via AppleScript with confirmation
+  </Card>
+</CardGroup>
 
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
+## How it works
 
-## Need inspiration?
+The skill runs entirely on your Mac. It queries three local SQLite databases — `chat.db` for iMessages, the Mail `Envelope Index` for emails, and the Address Book for contact names — and uses AppleScript to send messages through your existing apps.
 
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
-</Card>
+<Note>
+All data stays on your device. Nothing is sent to any external service beyond what Claude Code normally processes during a session.
+</Note>
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="diagram-project" href="/reference/architecture">
+    Learn how the orchestrator and agents work together
+  </Card>
+  <Card title="Database reference" icon="database" href="/reference/databases">
+    Explore the SQLite schemas and query patterns used
+  </Card>
+</CardGroup>

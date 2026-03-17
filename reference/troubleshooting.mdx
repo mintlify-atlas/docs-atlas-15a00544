@@ -1,0 +1,103 @@
+---
+title: "Troubleshooting"
+description: "Common issues and how to resolve them"
+---
+
+## Requirements checklist
+
+Before investigating any issue, verify that all requirements are met:
+
+- macOS (tested on macOS 15+)
+- Claude Code CLI installed
+- Full Disk Access granted to your terminal app
+- Messages.app signed into iMessage
+- Mail.app with at least one account configured
+
+<AccordionGroup>
+  <Accordion title='"Permission denied" or empty results from chat.db'>
+    **Cause**: Your terminal does not have Full Disk Access. macOS protects the Messages database, and any terminal without this permission will receive an empty result set or a permission error — without a clear error message.
+
+    **Fix**:
+    1. Open **System Settings** > **Privacy & Security** > **Full Disk Access**
+    2. Click the **+** button
+    3. Add your terminal app (Terminal.app, iTerm2, Warp, Ghostty, etc.)
+    4. Restart the terminal
+    5. Re-run the failing query
+
+    <Warning>
+      Granting Full Disk Access and then moving or renaming the terminal app will revoke the permission. You will need to re-add it.
+    </Warning>
+  </Accordion>
+
+  <Accordion title="Messages appear empty or show [Rich Text/Hidden]">
+    **Cause**: The message content is stored in the `attributedBody` column as an `NSAttributedString` binary blob rather than the `text` column. This is common for messages with formatting, links, tapback reactions, or messages sent from newer macOS versions.
+
+    **Fix**: Extract the readable text directly from the blob using:
+
+    ```bash
+    sqlite3 ~/Library/Messages/chat.db \
+      "SELECT HEX(attributedBody) FROM message WHERE ROWID = <ROWID>;" \
+      | xxd -r -p | strings
+    ```
+
+    Replace `<ROWID>` with the message's row ID from your earlier query. If multiple messages are affected, batch all ROWIDs into a single extraction pass.
+  </Accordion>
+
+  <Accordion title="Can't send iMessage: not registered with iMessage">
+    **Cause**: Either the recipient's phone number is not associated with an iMessage account, or Messages.app on your Mac is not signed into iMessage.
+
+    **Fix**:
+    - Verify the recipient uses iMessage (blue bubble in Messages.app, not green)
+    - Open Messages.app and confirm it is signed in with your Apple ID under Settings > iMessage
+    - If the recipient only uses SMS, the skill cannot send — SMS requires a different mechanism not supported by this skill
+  </Accordion>
+
+  <Accordion title="AppleScript permission denied for Messages.app or Mail.app">
+    **Cause**: The Automation permission dialog was dismissed or denied when the skill attempted to send a message for the first time.
+
+    **Fix**:
+    1. Open **System Settings** > **Privacy & Security** > **Automation**
+    2. Find your terminal app in the list
+    3. Enable the toggle next to **Messages** and/or **Mail**
+    4. Re-run the send command — no restart required
+  </Accordion>
+
+  <Accordion title="Mail database not found or empty results">
+    **Cause**: Mail.app is not configured, has no accounts set up, or the database path is for a different macOS version. The path `~/Library/Mail/V10/MailData/Envelope Index` corresponds to macOS 15+. Earlier versions use `V9`, `V8`, etc.
+
+    **Fix**:
+    - Ensure Mail.app has at least one email account configured and has synced at least once
+    - If on an older macOS version, check which version directory exists:
+
+    ```bash
+    ls ~/Library/Mail/
+    ```
+
+    Use the highest-numbered `V` directory that exists on your system.
+  </Accordion>
+
+  <Accordion title="Contact names show as phone numbers">
+    **Cause**: Either the Address Book database cannot be accessed (Full Disk Access issue) or the contact is not saved in Contacts.app on this Mac.
+
+    **Fix**:
+    - Confirm Full Disk Access is granted (see the first item above)
+    - Open Contacts.app and verify the person is listed with the correct phone number
+    - Contacts synced only to iCloud but not downloaded locally may not appear in the local database
+  </Accordion>
+
+  <Accordion title='SQLite "unable to open database" error'>
+    **Cause**: The database file path is incorrect, the file does not exist at that location, or the database is locked by another process.
+
+    **Fix**:
+    - Verify the path exists:
+
+    ```bash
+    ls ~/Library/Messages/chat.db
+    ls ~/Library/Mail/V10/MailData/"Envelope Index"
+    ls ~/Library/Application\ Support/AddressBook/AddressBook-v22.abcddb
+    ```
+
+    - Confirm Full Disk Access is granted to your terminal
+    - If the Messages or Mail database appears locked, try closing Messages.app or Mail.app and re-running the query. SQLite allows concurrent reads, but a write lock from the app can occasionally block external readers.
+  </Accordion>
+</AccordionGroup>

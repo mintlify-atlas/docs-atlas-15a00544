@@ -1,0 +1,58 @@
+---
+title: "Introduction"
+description: "What iMessage & Mail is and how it works"
+---
+
+iMessage & Mail is a [Claude Code](https://docs.anthropic.com/en/docs/claude-code) skill for reading, searching, and sending iMessages and emails on macOS. It queries the local Messages and Apple Mail SQLite databases directly on your machine and sends messages via AppleScript — no external services involved.
+
+## Agents
+
+The skill is composed of six specialized agents. When you invoke `/imessage-mail`, the orchestrator classifies your intent and routes to the appropriate agent automatically.
+
+<CardGroup cols={2}>
+  <Card title="Recent Activity" icon="clock" href="/guides/recent-activity">
+    See who texted or emailed you recently, with message previews and unread counts.
+  </Card>
+  <Card title="Conversation Reader" icon="messages" href="/guides/conversation-reader">
+    Read the full iMessage and email history for any contact.
+  </Card>
+  <Card title="Message Search" icon="magnifying-glass" href="/guides/message-search">
+    Full-text search across all iMessage conversations and Apple Mail.
+  </Card>
+  <Card title="Attachment Finder" icon="paperclip" href="/guides/attachment-finder">
+    Find photos, videos, PDFs, and other files from messages and emails.
+  </Card>
+  <Card title="Mail Reader" icon="envelope" href="/guides/mail-reader">
+    Browse, search, and read Apple Mail emails directly.
+  </Card>
+  <Card title="Send Message" icon="paper-plane" href="/guides/send-message">
+    Send iMessages and emails via AppleScript, with a confirmation prompt before sending.
+  </Card>
+</CardGroup>
+
+## How it works
+
+1. The **SKILL.md orchestrator** classifies your intent from the `/imessage-mail` invocation
+2. It routes to the appropriate **agent** markdown file
+3. The agent executes **SQLite queries** against local macOS databases:
+   - `~/Library/Messages/chat.db` — iMessage history
+   - `~/Library/Mail/V10/MailData/Envelope Index` — Apple Mail metadata
+   - `~/Library/Application Support/AddressBook/AddressBook-v22.abcddb` — Contacts
+4. For sending, it uses **AppleScript** via `osascript` to control Messages.app and Mail.app
+5. Contact resolution and cross-source searches use **parallel subagents** for performance
+
+## Requirements
+
+- **macOS** (tested on macOS 15+ / Apple Silicon)
+- **Claude Code** CLI
+- **Full Disk Access** granted to your terminal application
+- **Messages.app** signed into iMessage (for iMessage features)
+- **Mail.app** with at least one account configured (for email features)
+
+## Privacy
+
+<Note>
+  This skill runs entirely locally on your Mac. No message data, contacts, or email content is sent to any external service beyond what Claude Code normally processes. All database queries are read-only — the only writes are the messages you explicitly confirm sending through your local apps.
+</Note>
+
+Ready to get started? See the [Installation](/installation) guide.

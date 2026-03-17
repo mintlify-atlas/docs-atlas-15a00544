@@ -1,0 +1,162 @@
+---
+title: "AppleScript reference"
+description: "AppleScript patterns used to send iMessages and emails"
+---
+
+## Overview
+
+The skill uses `osascript` to control Messages.app and Mail.app for all send operations. No direct database writes are made — AppleScript drives the native macOS apps, which handle delivery.
+
+<Note>
+  The first time a send command runs, macOS will show a permission dialog asking whether to allow your terminal to control Messages.app or Mail.app. Click **Allow**. If denied, re-enable it in System Settings > Privacy & Security > Automation.
+</Note>
+
+## Sending iMessages
+
+### Basic send
+
+```bash
+osascript -e '
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set targetBuddy to participant "<phone_number>" of targetService
+    send "<message_text>" to targetBuddy
+end tell'
+```
+
+Phone numbers must be in **E.164 format** with country code — strip parentheses, dashes, and spaces from user input before passing to AppleScript. Example: `+13059651169`.
+
+### Send to an email handle
+
+Some iMessage contacts are registered with an email address rather than a phone number. Use the same pattern with an email address instead:
+
+```bash
+osascript -e '
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set targetBuddy to participant "<email>" of targetService
+    send "<message_text>" to targetBuddy
+end tell'
+```
+
+### Send with emojis
+
+Emojis work natively in AppleScript strings. Include them directly in the message text:
+
+```bash
+osascript -e '
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set targetBuddy to participant "+13059651169" of targetService
+    send "Hey! 🤖⚡🔥💻🚀✊" to targetBuddy
+end tell'
+```
+
+### String escaping
+
+When the message contains single quotes, escape them using the `'\''` pattern — close the shell quote, add an escaped single quote, then reopen:
+
+```bash
+# Message: "I'll be there"
+osascript -e '
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set targetBuddy to participant "+13059651169" of targetService
+    send "I'\''ll be there" to targetBuddy
+end tell'
+```
+
+For messages with complex characters (both single and double quotes, emojis), use a heredoc to avoid escaping entirely:
+
+```bash
+osascript <<'APPLESCRIPT'
+tell application "Messages"
+    set targetService to 1st account whose service type = iMessage
+    set targetBuddy to participant "+13059651169" of targetService
+    send "Message with 'quotes' and \"double quotes\" and emojis 🎉" to targetBuddy
+end tell
+APPLESCRIPT
+```
+
+## Sending emails
+
+Emails are sent through Mail.app using whatever account is set as the default.
+
+### New email
+
+```bash
+osascript -e '
+tell application "Mail"
+    set newMessage to make new outgoing message with properties {subject:"<subject>", content:"<body>", visible:false}
+    tell newMessage
+        make new to recipient at end of to recipients with properties {name:"<recipient_name>", address:"<recipient_email>"}
+    end tell
+    send newMessage
+end tell'
+```
+
+### Reply to a thread
+
+Prefix the subject with `Re: ` and Mail.app will thread the reply automatically:
+
+```bash
+osascript -e '
+tell application "Mail"
+    set newMessage to make new outgoing message with properties {subject:"Re: <original_subject>", content:"<body>", visible:false}
+    tell newMessage
+        make new to recipient at end of to recipients with properties {name:"<recipient_name>", address:"<recipient_email>"}
+    end tell
+    send newMessage
+end tell'
+```
+
+### Email with CC and BCC
+
+```bash
+osascript -e '
+tell application "Mail"
+    set newMessage to make new outgoing message with properties {subject:"<subject>", content:"<body>", visible:false}
+    tell newMessage
+        make new to recipient at end of to recipients with properties {name:"<to_name>", address:"<to_email>"}
+        make new cc recipient at end of cc recipients with properties {name:"<cc_name>", address:"<cc_email>"}
+        make new bcc recipient at end of bcc recipients with properties {name:"<bcc_name>", address:"<bcc_email>"}
+    end tell
+    send newMessage
+end tell'
+```
+
+### Email with multiple recipients
+
+```bash
+osascript -e '
+tell application "Mail"
+    set newMessage to make new outgoing message with properties {subject:"<subject>", content:"<body>", visible:false}
+    tell newMessage
+        make new to recipient at end of to recipients with properties {name:"<name1>", address:"<email1>"}
+        make new to recipient at end of to recipients with properties {name:"<name2>", address:"<email2>"}
+    end tell
+    send newMessage
+end tell'
+```
+
+## Error behaviors
+
+| Situation | Behavior |
+|---|---|
+| Messages.app is not running | AppleScript launches it automatically before sending |
+| Mail.app is not running | AppleScript launches it automatically before sending |
+| Phone number not registered with iMessage | Send fails — inform user and suggest SMS if available |
+| Mail.app has no configured accounts | Send fails — instruct user to add an account in Mail.app |
+| AppleScript returns no output and no error | Send was successful. This is normal behavior for `osascript` |
+
+## AppleScript permissions
+
+macOS controls which apps can be automated via AppleScript through the **Automation** privacy permission.
+
+**First time**: When a send command runs for the first time, macOS shows a dialog: *"Terminal wants to control Messages."* (or Mail). Click **Allow**. This is a one-time prompt per app.
+
+**If denied**: The permission can be re-enabled without reinstalling the skill:
+
+1. Open **System Settings** > **Privacy & Security** > **Automation**
+2. Find your terminal app in the list
+3. Enable the toggle for **Messages** and/or **Mail**

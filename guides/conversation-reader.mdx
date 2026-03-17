@@ -1,0 +1,219 @@
+---
+title: "Reading conversations"
+description: "Read full iMessage and email history for any contact"
+---
+
+The conversation reader retrieves the full message history for a specific person across both iMessage and Apple Mail. It resolves contact names, handles rich text extraction, and can interleave iMessages and emails chronologically.
+
+## When to use
+
+- You want to read your text history with a specific person
+- You want to see emails exchanged with a contact
+- You asked "show me my texts with John" or "all communications with Jane"
+- You have a phone number and want to see the conversation
+
+## Trigger phrases
+
+```
+Show me my texts with John
+Messages from +1234567890
+Emails from Jane
+All communications with John
+Conversation with Sarah
+```
+
+## How it works
+
+<Steps>
+  <Step title="Resolve the contact">
+    **If you provide a name**, the agent looks up matching phone numbers and email addresses from your Address Book using case-insensitive partial matching:
+
+    ```sql
+    -- Phone number lookup
+    SELECT T2.ZFULLNUMBER, T1.ZFIRSTNAME, T1.ZLASTNAME
+    FROM ZABCDRECORD AS T1
+    INNER JOIN ZABCDPHONENUMBER AS T2 ON T1.Z_PK = T2.ZOWNER
+    WHERE LOWER(T1.ZFIRSTNAME) LIKE LOWER('%<name>%')
+       OR LOWER(T1.ZLASTNAME) LIKE LOWER('%<name>%')
+       OR LOWER(T1.ZFIRSTNAME || ' ' || T1.ZLASTNAME) LIKE LOWER('%<name>%');
+    ```
+
+    ```sql
+    -- Email address lookup
+    SELECT T2.ZADDRESS, T1.ZFIRSTNAME, T1.ZLASTNAME
+    FROM ZABCDRECORD AS T1
+    INNER JOIN ZABCDEMAILADDRESS AS T2 ON T1.Z_PK = T2.ZOWNER
+    WHERE LOWER(T1.ZFIRSTNAME) LIKE LOWER('%<name>%')
+       OR LOWER(T1.ZLASTNAME) LIKE LOWER('%<name>%')
+       OR LOWER(T1.ZFIRSTNAME || ' ' || T1.ZLASTNAME) LIKE LOWER('%<name>%');
+    ```
+
+    The resolved number is then verified against `chat.db` to confirm a conversation exists:
+
+    ```sql
+    SELECT id FROM handle WHERE id LIKE '%<last_7_digits>%';
+    ```
+
+    **If you provide a phone number**, digits are extracted directly. **If you provide an email**, it's used for both Mail lookup and as a potential iMessage handle.
+
+    <Note>
+      If the name matches multiple contacts, the agent presents the options and asks you to choose before continuing.
+    </Note>
+  </Step>
+
+  <Step title="Fetch iMessages">
+    Retrieves the 25 most recent messages (configurable) with sender direction, content, timestamp, and any attachment filenames:
+
+    ```sql
+    SELECT
+      m.ROWID,
+      CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END as sender,
+      COALESCE(m.text, CASE WHEN m.attributedBody IS NOT NULL THEN '[Rich Text/Hidden]' ELSE '[No Text]' END) as content,
+      datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp,
+      a.filename,
+      a.mime_type
+    FROM message m
+    JOIN handle h ON m.handle_id = h.ROWID
+    LEFT JOIN message_attachment_join maj ON m.ROWID = maj.message_id
+    LEFT JOIN attachment a ON maj.attachment_id = a.ROWID
+    WHERE h.id LIKE '%<digits_only>'
+    ORDER BY m.date DESC
+    LIMIT 25;
+    ```
+  </Step>
+
+  <Step title="Fetch emails (parallel subagent)">
+    If the contact has an email address, a parallel subagent queries the Mail Envelope Index for messages received from them:
+
+    ```sql
+    SELECT
+      m.ROWID,
+      CASE WHEN mb.url LIKE '%Sent%' THEN 'Me' ELSE a.comment END as sender,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received,
+      CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status,
+      m.size
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    LEFT JOIN mailboxes mb ON m.mailbox = mb.ROWID
+    WHERE (a.address LIKE '%<email_or_domain>%' OR a.comment LIKE '%<contact_name>%')
+      AND m.deleted = 0
+    ORDER BY m.date_received DESC
+    LIMIT 20;
+    ```
+
+    A second query fetches emails you *sent* to the contact:
+
+    ```sql
+    SELECT
+      m.ROWID,
+      'Me' as sender,
+      sub.subject,
+      datetime(m.date_sent, 'unixepoch', 'localtime') as sent,
+      m.size
+    FROM messages m
+    JOIN recipients r ON r.message = m.ROWID
+    JOIN addresses a ON r.address = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE (a.address LIKE '%<email>%' OR a.comment LIKE '%<contact_name>%')
+      AND m.deleted = 0
+    ORDER BY m.date_sent DESC
+    LIMIT 20;
+    ```
+  </Step>
+
+  <Step title="Extract rich text bodies (parallel subagent)">
+    Many iMessages store their content as an `NSAttributedString` blob in `attributedBody` rather than the `text` column. For any message marked `[Rich Text/Hidden]`, a subagent processes them all in one batch:
+
+    ```bash
+    for ROWID in <ROWID1> <ROWID2> <ROWID3>; do
+      echo "---ROWID:$ROWID---"
+      sqlite3 ~/Library/Messages/chat.db \
+        "SELECT HEX(attributedBody) FROM message WHERE ROWID = $ROWID;" \
+        | xxd -r -p | strings | head -3
+    done
+    ```
+
+    The extracted text replaces `[Rich Text/Hidden]` placeholders in the final output.
+  </Step>
+
+  <Step title="Read email body on request">
+    To read a specific email in full, the agent locates its `.emlx` file on disk:
+
+    ```bash
+    find ~/Library/Mail/V10 -name "<MESSAGE_ROWID>.emlx" \
+      -o -name "<MESSAGE_ROWID>.partial.emlx" 2>/dev/null | head -1
+    ```
+
+    The first line of an `.emlx` file is a byte count and is skipped. For HTML emails, tags are stripped to return readable plain text:
+
+    ```bash
+    cat "$(find ~/Library/Mail/V10 -name '<MESSAGE_ROWID>.emlx' 2>/dev/null | head -1)" \
+      | tail -n +2 | sed -n '/<body/,/<\/body>/p' | sed 's/<[^>]*>//g' | head -50
+    ```
+  </Step>
+</Steps>
+
+## Output format
+
+iMessages are shown in a conversational style. Emails are shown in a table. If you ask for "all communications", both are interleaved chronologically.
+
+```
+## Conversation with John Smith
+
+### iMessages (+1234567890)
+*25 most recent*
+
+**14:30 Me**: Hey, are you free tonight?
+**14:32 John**: Yeah! What's up?
+**14:33 Me**: Check out this photo 📎 IMG_1234.jpg
+**14:35 John**: 😂 That's hilarious
+
+---
+
+### Emails (john@example.com)
+*10 most recent*
+
+| Status | Direction | Subject | Date |
+|--------|-----------|---------|------|
+| Read | From John | Re: Project Update | Mar 16, 10:00 |
+| Read | To John | Project Update | Mar 15, 14:30 |
+| UNREAD | From John | Invoice #1234 | Mar 14, 09:00 |
+```
+
+## Tapback reactions
+
+The agent can optionally surface tapback reactions attached to messages:
+
+```sql
+SELECT
+  m.ROWID,
+  m.associated_message_type,
+  m.associated_message_guid
+FROM message m
+JOIN handle h ON m.handle_id = h.ROWID
+WHERE h.id LIKE '%<digits_only>'
+  AND m.associated_message_type != 0
+ORDER BY m.date DESC
+LIMIT 20;
+```
+
+Tapback type values: `2000` = Love, `2001` = Like, `2002` = Dislike, `2003` = Laugh, `2004` = Emphasis, `2005` = Question.
+
+## What to do next
+
+<CardGroup cols={2}>
+  <Card title="Send a reply" icon="paper-plane" href="/guides/send-message">
+    Reply to the conversation directly after reading it.
+  </Card>
+  <Card title="Find attachments" icon="paperclip" href="/guides/attachment-finder">
+    Browse all photos and files exchanged in this conversation.
+  </Card>
+  <Card title="Search messages" icon="magnifying-glass" href="/guides/message-search">
+    Search for a specific keyword across all conversations.
+  </Card>
+  <Card title="Read email" icon="envelope" href="/guides/mail-reader">
+    Read the full body of any email from this contact.
+  </Card>
+</CardGroup>

@@ -1,80 +1,137 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Start reading and sending messages with your first commands"
 ---
 
-## Get started in three steps
+Once installed, invoke the skill in Claude Code by typing `/imessage-mail` followed by your intent in natural language. The skill classifies your request and routes it to the right agent automatically.
 
-Get your documentation site running locally and make your first customization.
+## Your first commands
 
-### Step 1: Set up your local environment
+<Tabs>
+  <Tab title="Recent messages">
+    Ask who has been in touch recently:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```
+    /imessage-mail who texted me
+    ```
 
-### Step 2: Deploy your changes
+    Example output:
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+    ```
+    ## Recent iMessages
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    | Contact              | Last Message        | Messages     | Preview                         |
+    |----------------------|---------------------|--------------|---------------------------------|
+    | Sarah Chen           | 2026-03-16 14:30    | 45 (↓23 ↑22) | "Hey, are we still on for..."   |
+    | Mike Johnson         | 2026-03-16 12:15    | 12 (↓8 ↑4)   | "Thanks for sending that!"      |
+    | +1555000111          | 2026-03-15 09:00    | 3 (↓3 ↑0)    | [Attachment: image]             |
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
+    ## Recent Emails (5 unread)
 
-### Step 3: Go live
+    | Status | From                         | Subject               | Received      |
+    |--------|------------------------------|-----------------------|---------------|
+    | UNREAD | Sarah Chen (sarah@corp.com)  | Re: Project Update    | Mar 16, 18:30 |
+    | Read   | GitHub (noreply@github.com)  | [repo] PR #42 merged  | Mar 16, 17:00 |
+    ```
+  </Tab>
+  <Tab title="Read a conversation">
+    Read full message history with a contact:
 
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
+    ```
+    /imessage-mail texts with Sarah
+    ```
+
+    Example output:
+
+    ```
+    ## Conversation with Sarah Chen
+
+    ### iMessages (+15551234567)
+    *25 most recent*
+
+    **14:30 Me**: Hey, are we still on for dinner tonight?
+    **14:32 Sarah**: Yeah! What time works?
+    **14:33 Me**: How about 7?
+    **14:35 Sarah**: Perfect, see you then!
+    ```
+  </Tab>
+  <Tab title="Send a message">
+    Send an iMessage with a natural language instruction:
+
+    ```
+    /imessage-mail text Sarah saying I'll be 10 minutes late
+    ```
+
+    The skill always shows you what it's about to send and asks for confirmation:
+
+    ```
+    **Ready to send:**
+
+    **Type:** iMessage
+    **To:** Sarah Chen (+15551234567)
+
+    > I'll be 10 minutes late
+
+    Send this? (y/n)
+    ```
+
+    Type `y` to send or `n` to cancel.
+  </Tab>
+  <Tab title="Search messages">
+    Search across all iMessages and emails simultaneously:
+
+    ```
+    /imessage-mail search "invoice"
+    ```
+
+    Example output:
+
+    ```
+    ## Search Results for "invoice"
+
+    ### iMessages — 2 matches
+    **Mike Johnson (+15559876543)**
+    - **Mar 14, 12:00 — Mike**: "Can you send me the invoice?"
+    - **Mar 14, 12:05 — Me**: "Just emailed it over"
+
+    ### Emails — 3 matches
+    | Status | From         | Subject               | Received      |
+    |--------|--------------|-----------------------|---------------|
+    | Read   | QuickBooks   | Invoice #1042 paid    | Mar 15, 10:00 |
+    | Read   | Mike Johnson | Re: Invoice request   | Mar 14, 12:30 |
+    | UNREAD | Vendor Inc.  | Invoice #8837 due     | Mar 12, 09:00 |
+    ```
+  </Tab>
+</Tabs>
+
+## Common commands
+
+| Command | What it does |
+|---------|-------------|
+| `/imessage-mail recent` | Recent iMessages and emails overview |
+| `/imessage-mail messages from Sarah` | Full conversation with a contact |
+| `/imessage-mail search "project deadline"` | Search across all messages and email |
+| `/imessage-mail email` | Browse Apple Mail inbox |
+| `/imessage-mail send a text to Mike saying I'm running late` | Send an iMessage |
+| `/imessage-mail find attachments from David` | Find files shared in messages |
+
+<Note>
+You don't need exact command syntax — the skill understands natural language. "Who emailed me today?", "Show me texts from Mom", and "Did anyone send me a PDF?" all work.
+</Note>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card title="Recent activity" icon="clock" href="/guides/recent-activity">
+    Learn how the recent activity overview works
+  </Card>
+  <Card title="Searching messages" icon="magnifying-glass" href="/guides/message-search">
+    Full-text search across iMessages and email
+  </Card>
+  <Card title="Sending messages" icon="paper-plane" href="/guides/send-message">
+    Send iMessages and emails with confirmation
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/reference/architecture">
+    How the orchestrator routes your requests
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

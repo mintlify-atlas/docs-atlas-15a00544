@@ -1,0 +1,247 @@
+---
+title: "Searching messages"
+description: "Full-text search across all iMessage conversations and Apple Mail"
+---
+
+The message search agent runs full-text queries across your iMessage database and Apple Mail inbox. It handles both plain-text messages and rich-text `attributedBody` blobs, and can search across both sources in parallel.
+
+## When to use
+
+- You remember a keyword or phrase but not who sent it
+- You want to find all messages mentioning a topic (e.g., "dinner", "invoice", "meeting")
+- You asked "did anyone text or email me about X?"
+- You want to narrow results to a date range or specific conversation
+
+## Trigger phrases
+
+```
+Search for messages about dinner
+Find messages mentioning invoice
+Did anyone text me about the meeting?
+Search my emails for Q1 report
+Find messages from last week about the project
+```
+
+## Source selection
+
+The agent selects which sources to search based on your phrasing:
+
+| Phrasing | Sources searched |
+|----------|------------------|
+| "search texts" / "search iMessages" | iMessage only |
+| "search emails" / "search mail" | Apple Mail only |
+| "search for messages about X" or ambiguous | Both — parallel subagents |
+
+## iMessage search
+
+### Search by text content
+
+SQLite `LIKE` is case-insensitive for ASCII by default, so searches for "dinner" will also match "Dinner" and "DINNER".
+
+```sql
+SELECT
+  m.ROWID,
+  h.id as contact,
+  CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END as sender,
+  m.text,
+  datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp
+FROM message m
+JOIN handle h ON m.handle_id = h.ROWID
+WHERE m.text LIKE '%<search_term>%'
+ORDER BY m.date DESC
+LIMIT 20;
+```
+
+### Search in attributedBody (rich text)
+
+Many messages store content in `attributedBody` rather than `text`, so a text-only search will miss them. A subagent handles these separately:
+
+```sql
+-- First, get candidate messages with no text but with attributedBody
+SELECT m.ROWID, h.id,
+  CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END,
+  datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime')
+FROM message m
+JOIN handle h ON m.handle_id = h.ROWID
+WHERE m.text IS NULL AND m.attributedBody IS NOT NULL
+ORDER BY m.date DESC
+LIMIT 100;
+```
+
+For each candidate ROWID, the subagent extracts readable text and checks for the keyword:
+
+```bash
+sqlite3 ~/Library/Messages/chat.db \
+  "SELECT HEX(attributedBody) FROM message WHERE ROWID = <ROWID>;" \
+  | xxd -r -p | strings
+```
+
+Only messages where the extracted text contains the search term are returned.
+
+### Search within a date range
+
+When you specify a time period (e.g., "from last week"), the query adds a date filter using the iMessage nanosecond epoch offset:
+
+```sql
+SELECT
+  m.ROWID,
+  h.id as contact,
+  CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END as sender,
+  m.text,
+  datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp
+FROM message m
+JOIN handle h ON m.handle_id = h.ROWID
+WHERE m.text LIKE '%<search_term>%'
+  AND m.date > (strftime('%s', '<YYYY-MM-DD>') - 978307200) * 1000000000
+ORDER BY m.date DESC
+LIMIT 20;
+```
+
+### Search within a specific conversation
+
+When you want to search inside one contact's messages only:
+
+```sql
+SELECT
+  m.ROWID,
+  CASE WHEN m.is_from_me = 1 THEN 'Me' ELSE 'Them' END as sender,
+  m.text,
+  datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp
+FROM message m
+JOIN handle h ON m.handle_id = h.ROWID
+WHERE h.id LIKE '%<digits_only>'
+  AND m.text LIKE '%<search_term>%'
+ORDER BY m.date DESC
+LIMIT 20;
+```
+
+## Apple Mail search
+
+### Search by subject
+
+```sql
+SELECT
+  m.ROWID,
+  a.comment as sender_name,
+  a.address as sender_email,
+  sub.subject,
+  datetime(m.date_received, 'unixepoch', 'localtime') as received,
+  CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status
+FROM messages m
+LEFT JOIN addresses a ON m.sender = a.ROWID
+LEFT JOIN subjects sub ON m.subject = sub.ROWID
+WHERE sub.subject LIKE '%<search_term>%'
+  AND m.deleted = 0
+ORDER BY m.date_received DESC
+LIMIT 20;
+```
+
+### Search by sender name or address
+
+```sql
+SELECT
+  m.ROWID,
+  a.comment as sender_name,
+  a.address as sender_email,
+  sub.subject,
+  datetime(m.date_received, 'unixepoch', 'localtime') as received,
+  CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status
+FROM messages m
+LEFT JOIN addresses a ON m.sender = a.ROWID
+LEFT JOIN subjects sub ON m.subject = sub.ROWID
+WHERE (a.address LIKE '%<search_term>%' OR a.comment LIKE '%<search_term>%')
+  AND m.deleted = 0
+ORDER BY m.date_received DESC
+LIMIT 20;
+```
+
+### Search emails within a date range
+
+```sql
+SELECT
+  m.ROWID,
+  a.comment as sender_name,
+  a.address as sender_email,
+  sub.subject,
+  datetime(m.date_received, 'unixepoch', 'localtime') as received
+FROM messages m
+LEFT JOIN addresses a ON m.sender = a.ROWID
+LEFT JOIN subjects sub ON m.subject = sub.ROWID
+WHERE sub.subject LIKE '%<search_term>%'
+  AND m.date_received > strftime('%s', '<YYYY-MM-DD>')
+  AND m.deleted = 0
+ORDER BY m.date_received DESC
+LIMIT 20;
+```
+
+### Read an email body for context
+
+To inspect the full content of a matched email, locate and read its `.emlx` file:
+
+```bash
+find ~/Library/Mail/V10 -name "<MESSAGE_ROWID>.emlx" 2>/dev/null | head -1
+```
+
+```bash
+cat "$(find ~/Library/Mail/V10 -name '<MESSAGE_ROWID>.emlx' 2>/dev/null | head -1)" \
+  | tail -n +2 | sed 's/<[^>]*>//g' | head -50
+```
+
+## Cross-source search pattern
+
+For ambiguous queries, the agent spawns two parallel subagents:
+
+1. **iMessage subagent** — runs the text search and attributedBody search
+2. **Mail subagent** — runs the subject and sender search
+
+Results are merged and presented grouped by source. Contact names for iMessage results are resolved from the Address Book using a parallel contact-resolver subagent.
+
+## Output format
+
+```
+## Search Results for "dinner"
+
+### iMessages — 5 matches across 3 conversations
+
+**John Smith (+1234567890)**
+- **Mar 16, 18:30 — Me**: "Want to grab dinner tonight?"
+- **Mar 16, 18:45 — John**: "Sure! How about that new dinner place on 5th?"
+
+**Jane Doe (+0987654321)**
+- **Mar 14, 12:00 — Jane**: "Dinner at mom's this Sunday?"
+- **Mar 14, 12:05 — Me**: "I'll be there for dinner!"
+
+**+1555000111**
+- **Mar 10, 19:00 — Them**: "Dinner was great, thanks for coming"
+
+---
+
+### Emails — 3 matches
+
+| Status | From | Subject | Received |
+|--------|------|---------|----------|
+| Read | OpenTable (no-reply@opentable.com) | Your dinner reservation | Mar 16, 12:00 |
+| Read | Jane Doe (jane@corp.com) | Team dinner RSVP | Mar 13, 10:00 |
+| UNREAD | Mom (mom@email.com) | Sunday dinner menu | Mar 12, 14:00 |
+```
+
+<Note>
+  The attributedBody search is thorough but slower — it processes up to 100 rich-text message candidates. For large message databases, searches may take a few seconds longer.
+</Note>
+
+## What to do next
+
+<CardGroup cols={2}>
+  <Card title="Read a conversation" icon="messages" href="/guides/conversation-reader">
+    Open the full conversation around any matched message.
+  </Card>
+  <Card title="Read email" icon="envelope" href="/guides/mail-reader">
+    Read the full body of any matched email.
+  </Card>
+  <Card title="Recent activity" icon="clock" href="/guides/recent-activity">
+    See all recent contacts if search results are sparse.
+  </Card>
+  <Card title="Send a message" icon="paper-plane" href="/guides/send-message">
+    Reply to a contact after finding their message.
+  </Card>
+</CardGroup>

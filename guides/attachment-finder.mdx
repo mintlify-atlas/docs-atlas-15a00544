@@ -1,0 +1,231 @@
+---
+title: "Finding attachments"
+description: "Find photos, videos, PDFs, and other files from iMessage conversations and Apple Mail"
+---
+
+The attachment finder searches your iMessage and Apple Mail databases for files sent or received in conversations. It returns filenames, MIME types, file sizes, and the context (sender, date, email subject) for each attachment.
+
+## When to use
+
+- You want to find a photo or document someone sent you
+- You asked "find photos from John" or "any files from Jane?"
+- You want to see all attachments from a recent conversation
+- You're looking for a specific file type (PDF, video, spreadsheet)
+- You're not sure whether the file came via text or email
+
+## Trigger phrases
+
+```
+Find photos from John
+What attachments did I receive recently?
+Show me files from this conversation
+Any email attachments from Jane?
+Find PDFs from last month
+Attachments from +1234567890
+```
+
+## Source selection
+
+The agent picks the right source based on how you phrase the request:
+
+| Phrasing | Sources searched |
+|----------|------------------|
+| "text attachments", "iMessage files" | iMessage only |
+| "email attachments", "mail files" | Apple Mail only |
+| "attachments from John", "files from Jane" | Both — parallel subagents |
+| No source specified | Both |
+
+## iMessage attachments
+
+### All recent iMessage attachments
+
+Returns the 20 most recent attachments across all conversations, with filename, MIME type, size, timestamp, contact handle, and direction:
+
+```sql
+SELECT
+  a.filename,
+  a.mime_type,
+  a.total_bytes,
+  datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp,
+  h.id as contact,
+  CASE WHEN m.is_from_me = 1 THEN 'Sent' ELSE 'Received' END as direction
+FROM attachment a
+JOIN message_attachment_join maj ON a.ROWID = maj.attachment_id
+JOIN message m ON maj.message_id = m.ROWID
+JOIN handle h ON m.handle_id = h.ROWID
+WHERE a.filename IS NOT NULL
+ORDER BY m.date DESC
+LIMIT 20;
+```
+
+### Attachments from a specific contact
+
+Adds a `handle` filter and includes the message context text:
+
+```sql
+SELECT
+  a.filename,
+  a.mime_type,
+  a.total_bytes,
+  datetime(m.date / 1000000000 + 978307200, 'unixepoch', 'localtime') as timestamp,
+  CASE WHEN m.is_from_me = 1 THEN 'Sent' ELSE 'Received' END as direction,
+  COALESCE(m.text, '') as context
+FROM attachment a
+JOIN message_attachment_join maj ON a.ROWID = maj.attachment_id
+JOIN message m ON maj.message_id = m.ROWID
+JOIN handle h ON m.handle_id = h.ROWID
+WHERE h.id LIKE '%<digits_only>'
+  AND a.filename IS NOT NULL
+ORDER BY m.date DESC
+LIMIT 30;
+```
+
+### Filter by file type
+
+Add a `mime_type` filter to the query above:
+
+| You ask for | MIME filter |
+|-------------|-------------|
+| photos / images | `a.mime_type LIKE 'image/%'` |
+| videos | `a.mime_type LIKE 'video/%'` |
+| PDFs / documents | `a.mime_type LIKE 'application/pdf'` |
+| audio / voice memos | `a.mime_type LIKE 'audio/%'` |
+| non-media files | `a.mime_type NOT LIKE 'image/%' AND a.mime_type NOT LIKE 'video/%'` |
+
+### Locating attachment files on disk
+
+iMessage stores attachment paths in the `filename` column with a `~` prefix pointing to `~/Library/Messages/Attachments/`. To verify a file exists:
+
+```bash
+ls -la "$(echo '<filename_from_query>' | sed 's|^~|'$HOME'|')" 2>/dev/null
+```
+
+## Apple Mail attachments
+
+### All recent email attachments
+
+```sql
+SELECT
+  att.name as filename,
+  a.comment as sender_name,
+  a.address as sender_email,
+  sub.subject,
+  datetime(m.date_received, 'unixepoch', 'localtime') as received
+FROM attachments att
+JOIN messages m ON att.message = m.ROWID
+LEFT JOIN addresses a ON m.sender = a.ROWID
+LEFT JOIN subjects sub ON m.subject = sub.ROWID
+WHERE att.name IS NOT NULL AND att.name != ''
+  AND m.deleted = 0
+ORDER BY m.date_received DESC
+LIMIT 20;
+```
+
+### Email attachments from a specific sender
+
+```sql
+SELECT
+  att.name as filename,
+  a.comment as sender_name,
+  a.address as sender_email,
+  sub.subject,
+  datetime(m.date_received, 'unixepoch', 'localtime') as received
+FROM attachments att
+JOIN messages m ON att.message = m.ROWID
+LEFT JOIN addresses a ON m.sender = a.ROWID
+LEFT JOIN subjects sub ON m.subject = sub.ROWID
+WHERE (a.address LIKE '%<email_or_name>%' OR a.comment LIKE '%<name>%')
+  AND att.name IS NOT NULL AND att.name != ''
+  AND m.deleted = 0
+ORDER BY m.date_received DESC
+LIMIT 20;
+```
+
+### Filter email attachments by file extension
+
+```sql
+-- Example: find PDFs
+SELECT
+  att.name,
+  a.comment as sender,
+  sub.subject,
+  datetime(m.date_received, 'unixepoch', 'localtime') as received
+FROM attachments att
+JOIN messages m ON att.message = m.ROWID
+LEFT JOIN addresses a ON m.sender = a.ROWID
+LEFT JOIN subjects sub ON m.subject = sub.ROWID
+WHERE att.name LIKE '%.pdf'
+  AND m.deleted = 0
+ORDER BY m.date_received DESC
+LIMIT 20;
+```
+
+Common extension filters: `%.pdf`, `%.xlsx`, `%.docx`, `%.zip`, `%.png`, `%.jpg`, `%.csv`
+
+### Locating email attachment files on disk
+
+Email attachments are stored alongside their `.emlx` files. First find the message file:
+
+```bash
+find ~/Library/Mail/V10 -name "<MESSAGE_ROWID>.emlx" 2>/dev/null | head -1
+```
+
+For MIME-encoded attachments, the base64-encoded data is embedded directly in the `.emlx` file.
+
+## Cross-source search
+
+When searching by contact name without specifying a source, the agent first resolves the contact's phone number and email from the Address Book:
+
+```sql
+SELECT T1.ZFIRSTNAME, T1.ZLASTNAME, T2.ZFULLNUMBER, T3.ZADDRESS
+FROM ZABCDRECORD AS T1
+LEFT JOIN ZABCDPHONENUMBER AS T2 ON T1.Z_PK = T2.ZOWNER
+LEFT JOIN ZABCDEMAILADDRESS AS T3 ON T1.Z_PK = T3.ZOWNER
+WHERE LOWER(T1.ZFIRSTNAME) LIKE LOWER('%<name>%')
+   OR LOWER(T1.ZLASTNAME) LIKE LOWER('%<name>%');
+```
+
+Then two parallel subagents run simultaneously — one searching `chat.db` by phone number, one searching the Mail Envelope Index by email address.
+
+## Output format
+
+```
+## Attachments from John Smith
+
+### iMessage Attachments
+| Date | Direction | File | Type | Size |
+|------|-----------|------|------|------|
+| Mar 16, 14:33 | Sent | IMG_1234.jpg | image/jpeg | 2.4 MB |
+| Mar 15, 10:20 | Received | document.pdf | application/pdf | 156 KB |
+
+### Email Attachments
+| Date | Subject | File |
+|------|---------|------|
+| Mar 14, 09:00 | Invoice #1234 | invoice_march.pdf |
+| Mar 10, 15:30 | Design Review | mockup_v3.fig |
+```
+
+A summary section follows the tables:
+
+```
+**iMessage**: 8 attachments (5 images, 2 videos, 1 file) — ~25 MB
+**Email**: 4 attachments (2 PDFs, 1 spreadsheet, 1 zip) — ~12 MB
+**Date range**: Mar 1 - Mar 16, 2026
+```
+
+## What to do next
+
+<CardGroup cols={2}>
+  <Card title="Read a conversation" icon="messages" href="/guides/conversation-reader">
+    See the full conversation context around a specific attachment.
+  </Card>
+  <Card title="Search messages" icon="magnifying-glass" href="/guides/message-search">
+    Search for messages mentioning a specific filename or topic.
+  </Card>
+  <Card title="Read email" icon="envelope" href="/guides/mail-reader">
+    Read the full email that contained an attachment.
+  </Card>
+  <Card title="Recent activity" icon="clock" href="/guides/recent-activity">
+    See all recent contacts alongside their latest messages.
+  </Card>
+</CardGroup>

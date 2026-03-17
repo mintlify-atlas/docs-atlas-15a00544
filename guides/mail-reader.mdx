@@ -1,0 +1,258 @@
+---
+title: "Reading email"
+description: "Browse, search, and read Apple Mail emails"
+---
+
+The mail reader queries Apple Mail's local SQLite database (`Envelope Index`) to list, search, and read your emails — without opening Mail.app. It can filter by mailbox, show unread messages, search by subject or sender, and read the full body of any email.
+
+## When to use
+
+- You want to check your inbox or see unread emails
+- You asked "any emails from John?" or "search my mail for invoices"
+- You want to read a specific email in full
+- You want to browse emails in a particular mailbox or folder
+
+## Trigger phrases
+
+```
+Check my email
+Any emails from John?
+Search my mail for invoices
+Show unread emails
+What's in my inbox?
+Emails about the Q1 report
+```
+
+## Database
+
+All queries run against Apple Mail's local Envelope Index database:
+
+```
+~/Library/Mail/V10/MailData/Envelope Index
+```
+
+<Note>
+  This file has no `.db` extension. Always quote the path when passing it to `sqlite3`.
+</Note>
+
+### Key tables
+
+| Table | Purpose |
+|-------|---------|
+| `messages` | Core table — sender, subject, dates, mailbox, read/flagged/deleted status, size |
+| `addresses` | Email addresses and display names |
+| `subjects` | Subject line text (normalized, referenced by FK) |
+| `mailboxes` | Mailbox paths (IMAP URL format), total and unread counts |
+| `recipients` | To/CC/BCC recipients for each message |
+| `attachments` | Attachment filenames linked to messages |
+| `summaries` | AI-generated email summaries (when available) |
+
+## Operations
+
+<Tabs>
+  <Tab title="Browse inbox">
+    ### List recent emails
+
+    Returns the 20 most recent non-deleted emails with sender, subject, received time, read status, and flagged state:
+
+    ```sql
+    SELECT
+      m.ROWID,
+      a.comment as sender_name,
+      a.address as sender_email,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received,
+      CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status,
+      m.flagged
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE m.deleted = 0
+    ORDER BY m.date_received DESC
+    LIMIT 20;
+    ```
+
+    ### List unread emails only
+
+    ```sql
+    SELECT
+      m.ROWID,
+      a.comment as sender_name,
+      a.address as sender_email,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE m.deleted = 0 AND m.read = 0
+    ORDER BY m.date_received DESC
+    LIMIT 20;
+    ```
+
+    ### Filter by mailbox
+
+    First list available mailboxes:
+
+    ```sql
+    SELECT ROWID, url, total_count, unread_count
+    FROM mailboxes
+    WHERE total_count > 0
+    ORDER BY total_count DESC;
+    ```
+
+    Then filter messages to a specific mailbox (e.g., INBOX):
+
+    ```sql
+    SELECT
+      m.ROWID,
+      a.comment as sender_name,
+      a.address as sender_email,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE m.mailbox = (SELECT ROWID FROM mailboxes WHERE url LIKE '%INBOX%' LIMIT 1)
+      AND m.deleted = 0
+    ORDER BY m.date_received DESC
+    LIMIT 20;
+    ```
+  </Tab>
+
+  <Tab title="Search by subject">
+    ```sql
+    SELECT
+      m.ROWID,
+      a.comment as sender_name,
+      a.address as sender_email,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received,
+      CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE sub.subject LIKE '%<search_term>%'
+      AND m.deleted = 0
+    ORDER BY m.date_received DESC
+    LIMIT 20;
+    ```
+
+    <Tip>
+      SQLite `LIKE` is case-insensitive for ASCII characters. Searching for `invoice` will also match `Invoice` and `INVOICE`.
+    </Tip>
+  </Tab>
+
+  <Tab title="Search by sender">
+    Matches against both the sender's email address and display name:
+
+    ```sql
+    SELECT
+      m.ROWID,
+      a.comment as sender_name,
+      a.address as sender_email,
+      sub.subject,
+      datetime(m.date_received, 'unixepoch', 'localtime') as received,
+      CASE WHEN m.read = 1 THEN 'Read' ELSE 'UNREAD' END as status
+    FROM messages m
+    LEFT JOIN addresses a ON m.sender = a.ROWID
+    LEFT JOIN subjects sub ON m.subject = sub.ROWID
+    WHERE (a.address LIKE '%<search_term>%' OR a.comment LIKE '%<search_term>%')
+      AND m.deleted = 0
+    ORDER BY m.date_received DESC
+    LIMIT 20;
+    ```
+  </Tab>
+
+  <Tab title="Read email body">
+    The Envelope Index does not store email body text. To read the full content of an email, the agent locates the corresponding `.emlx` file on disk:
+
+    ```bash
+    find ~/Library/Mail/V10 -name "<MESSAGE_ROWID>.emlx" \
+      -o -name "<MESSAGE_ROWID>.partial.emlx" 2>/dev/null | head -1
+    ```
+
+    The first line of an `.emlx` file is a byte count and is skipped when reading:
+
+    ```bash
+    cat "$(find ~/Library/Mail/V10 -name '<MESSAGE_ROWID>.emlx' 2>/dev/null | head -1)" \
+      | tail -n +2
+    ```
+
+    For HTML emails, strip tags to return readable plain text:
+
+    ```bash
+    cat "$(find ~/Library/Mail/V10 -name '<MESSAGE_ROWID>.emlx' 2>/dev/null | head -1)" \
+      | tail -n +2 \
+      | sed -n '/<body/,/<\/body>/p' \
+      | sed 's/<[^>]*>//g'
+    ```
+  </Tab>
+</Tabs>
+
+## Email details: recipients and attachments
+
+To see all recipients and any attachments for a specific email by its `ROWID`:
+
+```sql
+-- Recipients
+SELECT
+  a.comment as name,
+  a.address as email,
+  CASE r.type WHEN 0 THEN 'To' WHEN 1 THEN 'CC' WHEN 2 THEN 'BCC' END as recipient_type
+FROM recipients r
+JOIN addresses a ON r.address = a.ROWID
+WHERE r.message = <MESSAGE_ROWID>
+ORDER BY r.type, r.position;
+```
+
+```sql
+-- Attachments
+SELECT name FROM attachments WHERE message = <MESSAGE_ROWID>;
+```
+
+## AI summaries
+
+When Apple Intelligence has summarized an email, that summary is available in the `summaries` table:
+
+```sql
+SELECT
+  sub.subject,
+  sum.summary
+FROM messages m
+LEFT JOIN subjects sub ON m.subject = sub.ROWID
+LEFT JOIN summaries sum ON m.summary = sum.ROWID
+WHERE m.summary IS NOT NULL AND sum.summary IS NOT NULL
+ORDER BY m.date_received DESC
+LIMIT 10;
+```
+
+## Output format
+
+```
+## Recent Emails
+
+| Status | From | Subject | Received |
+|--------|------|---------|----------|
+| UNREAD | John Smith (john@example.com) | Re: Project Update | Mar 16, 18:30 |
+| Read | Jane Doe (jane@corp.com) | Q1 Report Attached | Mar 16, 15:20 |
+| UNREAD | GitHub (notifications@github.com) | [repo] New PR #42 | Mar 16, 14:00 |
+
+**Unread**: 3 of 20 shown
+```
+
+## What to do next
+
+<CardGroup cols={2}>
+  <Card title="Send a reply" icon="paper-plane" href="/guides/send-message">
+    Reply to an email directly after reading it.
+  </Card>
+  <Card title="Find attachments" icon="paperclip" href="/guides/attachment-finder">
+    Browse files attached to emails from a specific sender.
+  </Card>
+  <Card title="Search messages" icon="magnifying-glass" href="/guides/message-search">
+    Search across both email and iMessage at the same time.
+  </Card>
+  <Card title="Recent activity" icon="clock" href="/guides/recent-activity">
+    See recent emails alongside your latest iMessages.
+  </Card>
+</CardGroup>
